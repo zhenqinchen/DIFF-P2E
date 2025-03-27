@@ -7,20 +7,18 @@ config.model_save_path = 'E:/resourse/2024/ppg2ecg/model'
 config.partition_path = "D:/research/data/2024/PPG2ECG/partition/01_BIDMC_Partition.npy"
 
 ###数据库###
-config.RESULT='E:/resourse/2024/ppg'##结果存放位置，需要先创建
-config.ARTICLE_RESULT='E:/resourse/2024/ppg/result'##结果存放位置，需要先创建
+config.RESULT='E:/resourse/2024/ppg'
+config.ARTICLE_RESULT='E:/resourse/2024/ppg/result'
 
-###实验用的数据库
+
 config.db = ''
-
-
 
 
 
 config.smooth = False 
 config.seg_len = int(4*128) ##输入模型的长度
 config.fs = 128 
-config.smooth_label = False ###设为false，暂时不用
+config.smooth_label = False 
 config.filter = [7.5, 75]
 config.z_score_norm = True
 config.sig_time_len = 4
@@ -48,14 +46,8 @@ config.b2 = 0.999
 
 ##evaluate
 config.seed = 1
-config.qrs_thr = 50  ###评估R峰的窗口。单位：ms。 默认30ms。有的文献会用50ms
-config.ignore_sec = 0#10 ###前后10s不评估
 
 
-
-##code test
-config.show_pic = False
-config.show_bar = False
  
 
 def cfg():

@@ -1,43 +1,24 @@
 import torch.nn.functional as F
 
-
-def get_rpeak_model(c,name):
-    input_channel = 1
-
- 
-    out_channel = 1
-
-    from models.DCA.unet_monai import UNET
-    model = UNET( attention =False, transformer= False, cca =False, skip_att =False,
-            using_cbam =  False, num_res_units = 2,
-            input_channel=input_channel,out_channel = 1, kernel_size = 9,layer = 64,
-            input_size=c.seg_len,
-            patch_size=8,
-            spatial_att=True,
-            channel_att=True,
-            spatial_head_dim=[4, 4, 4, 4],
-            channel_head_dim=[2, 2, 2, 2],
-        ).cuda()
-    return model
-
 def get_rpeak_loss():#c, name
     from monai.losses import FocalLoss
     return FocalLoss(to_onehot_y=True)
 
-class DiffWaveLearner:
-  def __init__(self, model_dir, model, dataset, optimizer, rpeak_model,params, *args, **kwargs):
+
+class Difflearner:
+  def __init__(self, model_dir, model, dataset, optimizer, rpeak_model,*args, **kwargs):
     os.makedirs(model_dir, exist_ok=True)
     self.model_dir = model_dir
     self.model = model
     self.dataset = dataset
     self.optimizer = optimizer
-    self.params = params
+
     self.autocast = torch.cuda.amp.autocast(enabled=kwargs.get('fp16', False))
     self.scaler = torch.cuda.amp.GradScaler(enabled=kwargs.get('fp16', False))
     self.step = 0
     self.is_master = True
-
-    beta = np.array(self.params.noise_schedule)
+    self.noise_schedule = c.noise_schedule
+    beta = np.array(self.noise_schedule)
     noise_level = np.cumprod(1 - beta)
     self.noise_level = torch.tensor(noise_level.astype(np.float32))
     self.loss_fn = nn.MSELoss(reduction='mean') #get_loss(c, c.loss_name)
@@ -58,7 +39,6 @@ class DiffWaveLearner:
         'model': { k: v.cpu() if isinstance(v, torch.Tensor) else v for k, v in model_state.items() },
         'rpeak_model': { k: v.cpu() if isinstance(v, torch.Tensor) else v for k, v in rpeak_model_state.items() },
         'optimizer': { k: v.cpu() if isinstance(v, torch.Tensor) else v for k, v in self.optimizer.state_dict().items() },
-        'params': dict(self.params),
         'scaler': self.scaler.state_dict(),
     }
 
@@ -143,7 +123,7 @@ class DiffWaveLearner:
             pred_rlabel = self.rpeak_model(noisy.unsqueeze(dim=1))
             pred_rlabel = F.sigmoid(pred_rlabel)
      #   print(pred_rlabel.shape, rlabel.shape)
-        t = torch.randint(0, len(self.params.noise_schedule), [N], device=audio.device)
+        t = torch.randint(0, len(self.noise_schedule), [N], device=audio.device)
         noise_scale = self.noise_level[t].unsqueeze(1)
         # noise_scale = self.sqrt_alphas_cumprod_prev[t+1].unsqueeze(1)
         noise_scale_sqrt = noise_scale**0.5
@@ -177,44 +157,36 @@ class DiffWaveLearner:
                 loss = self.loss_fn(noise, predicted.squeeze(1))
     self.scaler.scale(loss).backward()
     self.scaler.unscale_(self.optimizer)
-    self.grad_norm = nn.utils.clip_grad_norm_(self.model.parameters(), self.params.max_grad_norm or 1e9)
+    self.grad_norm = nn.utils.clip_grad_norm_(self.model.parameters(), None or 1e9)
     self.scaler.step(self.optimizer)
     self.scaler.update()
     return loss,rloss,dloss,x0loss
 
 
+def train(train_dataloader):
 
 
-
-
-def train(train_dataloader, params):
-
-
-    model = get_model(c.model_name, params)
+    model = get_model(c.model_name)
     init_weights(model, init_type='xavier')
 
     rpeak_model = get_rpeak_model(c, c.rpeak_model_name)
-    
 
     if c.r_con:
         opt = optim.RAdam(list(model.parameters()) + list(rpeak_model.parameters()), lr=c.lr) #optim.RAdam([*model.parameters(), *rpeak_model.parameters()], lr=c.lr)
     else:
         opt = torch.optim.Adam(model.parameters(), lr=c.lr)
 
-    learner = DiffWaveLearner(model_dir, model, train_dataloader, opt,rpeak_model,params, fp16=True)
+    learner = Difflearner(model_dir, model, train_dataloader, opt,rpeak_model, fp16=True)
     learner.train(max_epochs=c.max_epoch)
 
     
-
-
-
-def predict(noisy_audio=None, model=None, rlabel = None,params=None, device=torch.device('cuda'), fast_sampling=False):
+def predict(noisy_audio=None, model=None, rlabel = None, device=torch.device('cuda')):
 
         
     with torch.no_grad():
 
-        training_noise_schedule = np.array(params.noise_schedule)
-        inference_noise_schedule = np.array(params.inference_noise_schedule) if fast_sampling else training_noise_schedule
+        training_noise_schedule = np.array(c.noise_schedule)
+        inference_noise_schedule = training_noise_schedule
 
         talpha = 1 - training_noise_schedule
         talpha_cum = np.cumprod(talpha)
@@ -252,7 +224,7 @@ def predict(noisy_audio=None, model=None, rlabel = None,params=None, device=torc
                 sigma = ((1.0 - alpha_cum[n-1]) / (1.0 - alpha_cum[n]) * beta[n])**0.5
                 audio += sigma * noise
 
-    return audio,params.sample_rate
+    return audio,_
 
 def normalize_signal(signal):
     from sklearn.preprocessing import MinMaxScaler
@@ -273,7 +245,7 @@ def test(test_dataloader):
    
     checkpoint = torch.load(f'{model_dir}/{model_file}.pt')
 
-    model = get_model(c.model_name, base_params)
+    model = get_model(c.model_name)
     model.load_state_dict(checkpoint['model'])
     model.eval()
     rpeak_model = get_rpeak_model(c, c.rpeak_model_name)
@@ -297,7 +269,7 @@ def test(test_dataloader):
             rlabel = pred_rlabel.squeeze(dim=1)
         audio = None
         for k in range(c.sample_k):
-            tmp_audio, sr = predict(noisy_signal, model=model, rlabel = rlabel, params=base_params,fast_sampling = fast_sampling)
+            tmp_audio, sr = predict(noisy_signal, model=model, rlabel = rlabel,fast_sampling = fast_sampling)
             if audio is None:
                 audio = tmp_audio
             else:
@@ -321,4 +293,4 @@ def test(test_dataloader):
             rlabels = np.vstack((rlabels, rlabel))
     
 
-    util.evaluate(origins, refs,syns, rlabels,c, align = True) 
+    util.evaluate(origins, refs,syns, rlabels,c, align = True)

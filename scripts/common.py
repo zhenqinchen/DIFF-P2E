@@ -11,8 +11,6 @@ def get_loss(c, name):
         def diff_loss(noise1, noise2, audio,p_audio,weight = 0.5):
             loss1 = sloss1(noise1, noise2)
             loss2 = sloss2(audio, p_audio)
-          #  print(weight)
-          #  print(weight,loss1, loss2)
             loss = weight*loss1+ (1-weight)*loss2
             return loss
         return diff_loss
@@ -56,22 +54,6 @@ def _nested_map(struct, map_fn):
 
 
 
-
-
-
-
-
-def train(train_dataloader, params):
-
-
-    model = get_model(c.model_name, params)
-    init_weights(model, init_type='xavier')
-
-    #opt = torch.optim.Adam(model.parameters(), lr=params.learning_rate)
-    opt = optim.RAdam(model.parameters(), lr=c.lr)
-    learner = DiffWaveLearner(model_dir, model, train_dataloader, opt, params, fp16=True)
-    learner.train(max_epochs=c.max_epoch)
-
     
 def init_weights(net, init_type='normal', init_gain=0.02):
     """Initialize network weights.
@@ -106,18 +88,14 @@ def init_weights(net, init_type='normal', init_gain=0.02):
 
     
 
-def get_model(name, params):
+def get_model(name):
     if c.r_con:
         cond_dim = 2
     else:
         cond_dim = 1
-
- 
-
     from models.conditional_unet1d import ConditionalUnet1D    
-    model = ConditionalUnet1D(input_dim = 1, local_cond_dim = cond_dim, diffusion_step_embed_dim = 128,params = AttrDict(params),
+    model = ConditionalUnet1D(input_dim = 1, local_cond_dim = cond_dim, diffusion_step_embed_dim = 128,params = None,
                                 cond_predict_scale = False,).cuda()
-
     return model
 
 
@@ -127,7 +105,6 @@ def get_model(name, params):
 def normalize_signal(signal):
     from sklearn.preprocessing import MinMaxScaler
     scaler = MinMaxScaler(feature_range=(-1, 1), copy=True, clip= True)#
-    
     signal = scaler.fit_transform(signal.T).T
     return signal
 
